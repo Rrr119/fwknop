@@ -3,6 +3,7 @@
 #
 # Import the Fko class and all constants.
 #
+import os
 from fko import *
 
 def main():
@@ -14,6 +15,11 @@ def main():
     # Set the HMAC digest algorithm
     #
     fko.hmac_type(FKO_HMAC_SHA512)
+
+    # Allow tests to exercise the server-side SPA time window.
+    #
+    if os.environ.get("FKO_TIME_OFFSET"):
+        fko.timestamp(int(os.environ["FKO_TIME_OFFSET"]))
 
     # Set the SPA message (Note: Access request is default if not specified).
     #

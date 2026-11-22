@@ -114,7 +114,9 @@ The following is a complete list of features supported by the fwknop project:
    of operation is encrypt-then-authenticate to avoid various cryptanalytic problems.
  * Replay attacks are detected and thwarted by SHA-256 digest comparison of valid
    incoming SPA packets. Other digest algorithms are also supported, but SHA-256 is
-   the default.
+   the default. Replay protection honors the existing `MAX_SPA_PACKET_AGE` and
+   `ENABLE_SPA_PACKET_AGING` settings, and cache entries expire after the packet
+   acceptance window closes.
  * SPA packets are passively sniffed from the wire via libpcap. The fwknopd server
    can also acquire packet data from a file that is written to by a separate Ethernet
    sniffer (such as with `tcpdump -w <file>`), from the iptables ULOG pcap writer, or

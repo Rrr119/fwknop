@@ -516,6 +516,7 @@ our %cf = (
     "${fw_conf_prefix}_snat_translate_ip"    => "$conf_dir/${fw_conf_prefix}_snat_translate_ip_fwknopd.conf",
     'def'                          => "$conf_dir/default_fwknopd.conf",
     'def_access'                   => "$conf_dir/default_access.conf",
+    'replay_no_aging'              => "$conf_dir/replay_no_aging_fwknopd.conf",
     'portrange_filter'             => "$conf_dir/portrange_fwknopd.conf",
     'hmac_access'                  => "$conf_dir/hmac_access.conf",
     'include1_hmac_access'         => "$conf_dir/include1_hmac_access.conf",
@@ -3271,11 +3272,7 @@ sub python_fko_compile_install() {
     return $rv;
 }
 
-sub python_fko_basic_exec() {
-    my $test_hr = shift;
-
-    my $rv = 1;
-
+sub python_fko_site_dir() {
     my $site_dir = "$python_fko_dir/lib";
 
     unless (-d $site_dir) {
@@ -3283,7 +3280,7 @@ sub python_fko_basic_exec() {
         unless (-d $site_dir) {
             &write_test_file("[-] $site_dir directory dir does not exist.\n",
                 $curr_test_file);
-            return 0;
+            return '';
         }
     }
 
@@ -3296,8 +3293,19 @@ sub python_fko_basic_exec() {
     unless (-d $site_dir) {
         &write_test_file("[-] $site_dir directory dir does not exist.\n",
             $curr_test_file);
-        return 0;
+        return '';
     }
+
+    return $site_dir;
+}
+
+sub python_fko_basic_exec() {
+    my $test_hr = shift;
+
+    my $rv = 1;
+    my $site_dir = &python_fko_site_dir();
+
+    return 0 unless $site_dir;
 
     $rv = &run_cmd("$lib_view_str " .
         "PYTHONPATH=$site_dir $python_path ./$python_script",
@@ -3327,6 +3335,44 @@ sub python_fko_basic_exec() {
     return $rv;
 }
 
+sub python_fko_generate_spa_packet() {
+    my $time_offset = shift;
+    my $site_dir = &python_fko_site_dir();
+    my $spa_pkt = '';
+    my $cmd = "$lib_view_str ";
+
+    return '' unless $site_dir;
+
+    if (defined($time_offset)) {
+        $cmd .= "FKO_TIME_OFFSET=$time_offset ";
+    }
+
+    $cmd .= "PYTHONPATH=$site_dir $python_path ./$python_script";
+
+    unless (&run_cmd($cmd, $cmd_out_tmp, $curr_test_file)) {
+        &write_test_file("[-] Python FKO client execution failed.\n",
+            $curr_test_file);
+        return '';
+    }
+
+    open GSPA, "< $cmd_out_tmp" or die $!;
+    while (<GSPA>) {
+        if (/SPA\spacket\sdata\:\s(\S+)/) {
+            $spa_pkt = $1;
+            last;
+        }
+    }
+    close GSPA;
+
+    unless ($spa_pkt) {
+        &write_test_file("[-] could not acquire SPA packet from python output\n",
+            $curr_test_file);
+        return '';
+    }
+
+    return $spa_pkt;
+}
+
 sub python_fko_client_to_C_server() {
     my $test_hr = shift;
 
@@ -3343,6 +3389,24 @@ sub python_fko_client_to_C_server() {
         = &client_server_interaction($test_hr, \@packets, $USE_PREDEF_PKTS);
 
     return $rv;
+}
+
+sub python_fko_replay_protection() {
+    my $test_hr = shift;
+    my $spa_pkt = &python_fko_generate_spa_packet();
+
+    return 0 unless $spa_pkt;
+
+    return &replay_predefined_packet($test_hr, $spa_pkt);
+}
+
+sub python_fko_time_window() {
+    my $test_hr = shift;
+    my $spa_pkt = &python_fko_generate_spa_packet(-300);
+
+    return 0 unless $spa_pkt;
+
+    return &expired_packet_rejected($test_hr, $spa_pkt);
 }
 
 sub perl_fko_module_compile_install() {
@@ -5200,6 +5264,52 @@ sub perl_fko_module_client_compatibility() {
     return $rv;
 }
 
+sub perl_fko_module_generate_spa_packet() {
+    my $time_offset = shift;
+    my $spa_pkt = '';
+
+    $fko_obj = FKO->new();
+
+    unless ($fko_obj) {
+        &write_test_file("[-] error FKO->new(): " . FKO::error_str() . "\n",
+            $curr_test_file);
+        return '';
+    }
+
+    $fko_obj->spa_message("$fake_ip,tcp/22");
+    $fko_obj->spa_message_type(FKO->FKO_ACCESS_MSG);
+    $fko_obj->timestamp($time_offset) if defined($time_offset);
+    $fko_obj->spa_data_final($default_key, '');
+    $spa_pkt = $fko_obj->spa_data();
+    $fko_obj->destroy();
+
+    unless ($spa_pkt) {
+        &write_test_file("[-] Perl FKO client generated an empty SPA packet.\n",
+            $curr_test_file);
+        return '';
+    }
+
+    return $spa_pkt;
+}
+
+sub perl_fko_module_replay_protection() {
+    my $test_hr = shift;
+    my $spa_pkt = &perl_fko_module_generate_spa_packet();
+
+    return 0 unless $spa_pkt;
+
+    return &replay_predefined_packet($test_hr, $spa_pkt);
+}
+
+sub perl_fko_module_time_window() {
+    my $test_hr = shift;
+    my $spa_pkt = &perl_fko_module_generate_spa_packet(-300);
+
+    return 0 unless $spa_pkt;
+
+    return &expired_packet_rejected($test_hr, $spa_pkt);
+}
+
 sub get_mod_paths() {
 
     my @paths = ();
@@ -5420,6 +5530,55 @@ sub replay_detection() {
 
     my ($rv, $server_was_stopped, $fw_rule_created, $fw_rule_removed)
             = &client_server_interaction($test_hr, \@packets, $USE_PREDEF_PKTS);
+
+    return $rv;
+}
+
+sub replay_predefined_packet() {
+    my ($test_hr, $spa_pkt) = @_;
+
+    my @packets = (
+        {
+            'proto'  => 'udp',
+            'port'   => $default_spa_port,
+            'dst_ip' => $loopback_ip,
+            'data'   => $spa_pkt,
+        },
+        {
+            'proto'  => 'udp',
+            'port'   => $default_spa_port,
+            'dst_ip' => $loopback_ip,
+            'data'   => $spa_pkt,
+        },
+    );
+
+    my ($rv, $server_was_stopped, $fw_rule_created, $fw_rule_removed)
+            = &client_server_interaction($test_hr, \@packets, $USE_PREDEF_PKTS);
+
+    $rv = 0 unless &process_output_matches($test_hr);
+
+    return $rv;
+}
+
+sub expired_packet_rejected() {
+    my ($test_hr, $spa_pkt) = @_;
+
+    my %test_copy = %$test_hr;
+    $test_copy{'sleep_cycles'} = 1 unless $test_copy{'sleep_cycles'};
+
+    my @packets = (
+        {
+            'proto'  => 'udp',
+            'port'   => $default_spa_port,
+            'dst_ip' => $loopback_ip,
+            'data'   => $spa_pkt,
+        },
+    );
+
+    my ($rv, $server_was_stopped, $fw_rule_created, $fw_rule_removed)
+            = &client_server_interaction(\%test_copy, \@packets, $USE_PREDEF_PKTS);
+
+    $rv = 0 unless &process_output_matches(\%test_copy);
 
     return $rv;
 }

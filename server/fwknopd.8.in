@@ -382,9 +382,9 @@ option to send the SPA packet over a random port, then this variable should be u
 .RS 4
 This instructs
 \fBfwknopd\fR
-to not honor SPA packets that have an old time stamp\&. The value for \(lqold\(rq is defined by the \(lqMAX_SPA_PACKET_AGE\(rq variable\&. If \(lqENABLE_SPA_PACKET_AGING\(rq is set to \(lqN\(rq,
+to not honor SPA packets whose time stamp is outside the window defined by the \(lqMAX_SPA_PACKET_AGE\(rq variable\&. Both old and future time stamps are checked\&. When packet aging is enabled, replay cache entries are retained for twice the configured window so that a packet cannot be replayed while it is still within the acceptance window\&. If \(lqENABLE_SPA_PACKET_AGING\(rq is set to \(lqN\(rq,
 \fBfwknopd\fR
-will not use the client time stamp at all\&.
+will not use the client time stamp at all and replay cache entries remain until the cache is rotated\&.
 .RE
 .PP
 \fBMAX_SPA_PACKET_AGE\fR \fI<seconds>\fR
@@ -400,7 +400,7 @@ Track digest sums associated with previous SPA packets processed by
 \fBfwknopd\fR\&. This allows digest sums to remain persistent across executions of
 \fBfwknopd\fR\&. The default is \(lqY\(rq\&. If set to \(lqN\(rq,
 \fBfwknopd\fR
-will not check incoming SPA packet data against any previously save digests\&. It is a good idea to leave this feature on to reduce the possibility of being vulnerable to a replay attack\&.
+will not check incoming SPA packet data against any previously saved digests\&. It is a good idea to leave this feature on to reduce the possibility of being vulnerable to a replay attack\&. If the digest file cannot be opened, replay tracking continues in memory for the lifetime of the \fBfwknopd\fR process\&.
 .RE
 .PP
 \fBRULES_CHECK_THRESHOLD\fR \fI<count>\fR

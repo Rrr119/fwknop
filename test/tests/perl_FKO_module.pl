@@ -210,4 +210,23 @@
         'fw_rule_created' => $NEW_RULE_REQUIRED,
         'fw_rule_removed' => $NEW_RULE_REMOVED,
     },
+    {
+        'category' => 'perl FKO module',
+        'subcategory' => 'compatibility',
+        'detail'   => 'replay cache (Perl FKO client)',
+        'function' => \&perl_fko_module_replay_protection,
+        'fwknopd_cmdline' => "$fwknopdCmd $default_server_conf_args $intf_str",
+        'server_positive_output_matches' => [qr/Replay\sdetected\sfrom\ssource\sIP/],
+        'fw_rule_created' => $NEW_RULE_REQUIRED,
+        'fw_rule_removed' => $NEW_RULE_REMOVED,
+    },
+    {
+        'category' => 'perl FKO module',
+        'subcategory' => 'compatibility',
+        'detail'   => 'time window rejects old packet (Perl FKO client)',
+        'function' => \&perl_fko_module_time_window,
+        'fwknopd_cmdline' => "$fwknopdCmd $default_server_conf_args $intf_str",
+        'server_positive_output_matches' => [qr/time\sdifference\sis\stoo\sgreat/],
+        'fw_rule_created' => $REQUIRE_NO_NEW_RULE,
+    },
 );

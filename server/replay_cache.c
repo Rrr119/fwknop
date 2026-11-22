@@ -47,6 +47,7 @@
 
   #define MY_DBM_FETCH(d, k)        gdbm_fetch(d, k)
   #define MY_DBM_STORE(d, k, v, m)  gdbm_store(d, k, v, m)
+  #define MY_DBM_DELETE(d, k)       gdbm_delete(d, k)
   #define MY_DBM_STRERROR(x)        gdbm_strerror(x)
   #define MY_DBM_CLOSE(d)           gdbm_close(d)
 
@@ -58,6 +59,7 @@
 
   #define MY_DBM_FETCH(d, k)        dbm_fetch(d, k)
   #define MY_DBM_STORE(d, k, v, m)  dbm_store(d, k, v, m)
+  #define MY_DBM_DELETE(d, k)       dbm_delete(d, k)
   #define MY_DBM_STRERROR(x)        strerror(x)
   #define MY_DBM_CLOSE(d)           dbm_close(d)
 
@@ -79,6 +81,31 @@
 
 #define DATE_LEN 18
 #define MAX_DIGEST_SIZE 64
+
+/* A packet can have a timestamp up to MAX_SPA_PACKET_AGE seconds in the
+ * future, so a cache entry must survive for at least twice the configured
+ * time window to cover every packet that fwknopd will accept.
+*/
+#define REPLAY_CACHE_AGE_MULTIPLIER 2
+
+static int
+replay_cache_entry_expired(const fko_srv_options_t *opts,
+        const digest_cache_info_t *cache_info, time_t now)
+{
+    time_t cache_lifetime;
+
+    /* Without packet aging there is no time window, so retain all entries. */
+    if(strncasecmp(opts->config[CONF_ENABLE_SPA_PACKET_AGING], "Y", 1) != 0)
+        return 0;
+
+    if(opts->max_spa_packet_age <= 0 || cache_info->created > now)
+        return 0;
+
+    cache_lifetime = (time_t)opts->max_spa_packet_age
+        * (time_t)REPLAY_CACHE_AGE_MULTIPLIER;
+
+    return (now - cache_info->created) > cache_lifetime;
+}
 
 /* Rotate the digest file by simply renaming it.
 */
@@ -209,6 +236,37 @@ replay_warning(fko_srv_options_t *opts, digest_cache_info_t *digest_info)
 }
 
 #if USE_FILE_CACHE
+static int
+prune_expired_replay_entries(fko_srv_options_t *opts)
+{
+    struct digest_cache_list **entry = &(opts->digest_cache);
+    struct digest_cache_list *expired = NULL;
+    time_t now = time(NULL);
+    int pruned = 0;
+
+    while(*entry != NULL)
+    {
+        if(replay_cache_entry_expired(opts, &((*entry)->cache_info), now))
+        {
+            expired = *entry;
+            *entry = expired->next;
+
+            if(expired->cache_info.digest != NULL)
+                free(expired->cache_info.digest);
+            free(expired);
+            pruned++;
+        }
+        else
+            entry = &((*entry)->next);
+    }
+
+    if(pruned > 0 && opts->verbose > 3)
+        log_msg(LOG_DEBUG,
+            "Pruned %i expired replay cache entries", pruned);
+
+    return pruned;
+}
+
 static int
 replay_file_cache_init(fko_srv_options_t *opts)
 {
@@ -362,6 +420,8 @@ replay_file_cache_init(fko_srv_options_t *opts)
 
     fclose(digest_file_ptr);
 
+    digest_ctr -= prune_expired_replay_entries(opts);
+
     return(digest_ctr);
 }
 
@@ -438,7 +498,12 @@ is_replay_file_cache(fko_srv_options_t *opts, char *digest)
 
     struct digest_cache_list *digest_list_ptr = NULL;
 
+    if(digest == NULL || digest[0] == '\0')
+        return(SPA_MSG_DIGEST_CACHE_ERROR);
+
     digest_len = strlen(digest);
+
+    prune_expired_replay_entries(opts);
 
     /* Check the cache for the SPA packet digest
     */
@@ -446,7 +511,8 @@ is_replay_file_cache(fko_srv_options_t *opts, char *digest)
             digest_list_ptr != NULL;
             digest_list_ptr = digest_list_ptr->next) {
 
-        if (constant_runtime_cmp(digest_list_ptr->cache_info.digest,
+        if (strlen(digest_list_ptr->cache_info.digest) == (size_t)digest_len
+                && constant_runtime_cmp(digest_list_ptr->cache_info.digest,
                     digest, digest_len) == 0) {
 
             replay_warning(opts, &(digest_list_ptr->cache_info));
@@ -467,7 +533,12 @@ add_replay_file_cache(fko_srv_options_t *opts, char *digest)
 
     struct digest_cache_list *digest_elm = NULL;
 
+    if(digest == NULL || digest[0] == '\0')
+        return(SPA_MSG_DIGEST_CACHE_ERROR);
+
     digest_len = strlen(digest);
+
+    prune_expired_replay_entries(opts);
 
     if ((digest_elm = calloc(1, sizeof(struct digest_cache_list))) == NULL)
     {
@@ -501,9 +572,10 @@ add_replay_file_cache(fko_srv_options_t *opts, char *digest)
     */
     if ((digest_file_ptr = fopen(opts->config[CONF_DIGEST_FILE], "a")) == NULL)
     {
-        log_msg(LOG_WARNING, "Could not open digest cache: %s: %s",
+        log_msg(LOG_WARNING,
+            "Could not open digest cache: %s: %s (digest retained in memory)",
             opts->config[CONF_DIGEST_FILE], strerror(errno));
-        return(SPA_MSG_DIGEST_CACHE_ERROR);
+        return(SPA_MSG_SUCCESS);
     }
 
     inet_ntop(AF_INET, &(digest_elm->cache_info.src_ip),
@@ -574,20 +646,41 @@ is_replay_dbm_cache(fko_srv_options_t *opts, char *digest)
     */
     if(db_ent.dptr != NULL)
     {
-        replay_warning(opts, (digest_cache_info_t *)db_ent.dptr);
-
-        /* Save it back to the digest cache
-        */
-        if(MY_DBM_STORE(rpdb, db_key, db_ent, MY_DBM_REPLACE) != 0)
-            log_msg(LOG_WARNING, "Error updating entry in digest_cache: '%s': %s",
-                opts->config[CONF_DIGEST_DB_FILE],
-                MY_DBM_STRERROR(errno)
+        if(db_ent.dsize < (int)sizeof(digest_cache_info_t))
+        {
+            log_msg(LOG_WARNING,
+                "Invalid entry in digest_cache: '%s'",
+                opts->config[CONF_DIGEST_DB_FILE]
             );
+            MY_DBM_DELETE(rpdb, db_key);
+            res = SPA_MSG_DIGEST_CACHE_ERROR;
+        }
+        else if(replay_cache_entry_expired(opts,
+                    (digest_cache_info_t *)db_ent.dptr, time(NULL)))
+        {
+            /* The packet timestamp can no longer pass the time window, so
+             * this entry no longer needs to occupy the replay cache.
+            */
+            MY_DBM_DELETE(rpdb, db_key);
+        }
+        else
+        {
+            replay_warning(opts, (digest_cache_info_t *)db_ent.dptr);
+
+            /* Save it back to the digest cache
+            */
+            if(MY_DBM_STORE(rpdb, db_key, db_ent, MY_DBM_REPLACE) != 0)
+                log_msg(LOG_WARNING, "Error updating entry in digest_cache: '%s': %s",
+                    opts->config[CONF_DIGEST_DB_FILE],
+                    MY_DBM_STRERROR(errno)
+                );
+
+            res = SPA_MSG_REPLAY;
+        }
 
 #ifdef HAVE_LIBGDBM
         free(db_ent.dptr);
 #endif
-        res = SPA_MSG_REPLAY;
     }
 
     MY_DBM_CLOSE(rpdb);
@@ -613,6 +706,7 @@ add_replay_dbm_cache(fko_srv_options_t *opts, char *digest)
     int         digest_len, res = SPA_MSG_SUCCESS;
 
     digest_cache_info_t dc_info;
+    int         entry_existed = 0;
 
     digest_len = strlen(digest);
 
@@ -640,13 +734,21 @@ add_replay_dbm_cache(fko_srv_options_t *opts, char *digest)
     }
 
     db_ent = MY_DBM_FETCH(rpdb, db_key);
+    entry_existed = (db_ent.dptr != NULL);
 
     /* If the datum is null, we have a new entry.
     */
-    if(db_ent.dptr == NULL)
+    if(!entry_existed || db_ent.dsize < (int)sizeof(digest_cache_info_t)
+            || replay_cache_entry_expired(opts,
+                (digest_cache_info_t *)db_ent.dptr, time(NULL)))
     {
         /* This is a new SPA packet that needs to be added to the cache.
         */
+#ifdef HAVE_LIBGDBM
+        if(entry_existed)
+            free(db_ent.dptr);
+#endif
+        memset(&dc_info, 0, sizeof(dc_info));
         dc_info.src_ip   = opts->spa_pkt.packet_src_ip;
         dc_info.dst_ip   = opts->spa_pkt.packet_dst_ip;
         dc_info.src_port = opts->spa_pkt.packet_src_port;
@@ -658,7 +760,8 @@ add_replay_dbm_cache(fko_srv_options_t *opts, char *digest)
         db_ent.dsize    = sizeof(digest_cache_info_t);
         db_ent.dptr     = (char*)&(dc_info);
 
-        if(MY_DBM_STORE(rpdb, db_key, db_ent, MY_DBM_INSERT) != 0)
+        if(MY_DBM_STORE(rpdb, db_key, db_ent,
+                    entry_existed ? MY_DBM_REPLACE : MY_DBM_INSERT) != 0)
         {
             log_msg(LOG_WARNING, "Error adding entry digest_cache: %s",
                 MY_DBM_STRERROR(errno)
@@ -666,8 +769,8 @@ add_replay_dbm_cache(fko_srv_options_t *opts, char *digest)
 
             res = SPA_MSG_DIGEST_CACHE_ERROR;
         }
-
-        res = SPA_MSG_SUCCESS;
+        else
+            res = SPA_MSG_SUCCESS;
     }
     else
         res = SPA_MSG_DIGEST_CACHE_ERROR;
@@ -703,14 +806,15 @@ free_replay_list(fko_srv_options_t *opts)
     while (digest_list_ptr != NULL)
     {
         digest_tmp = digest_list_ptr->next;
-        if (digest_list_ptr->cache_info.digest != NULL
-                && digest_list_ptr->cache_info.digest[0] != '\0')
+        if (digest_list_ptr->cache_info.digest != NULL)
         {
             free(digest_list_ptr->cache_info.digest);
         }
         free(digest_list_ptr);
         digest_list_ptr = digest_tmp;
     }
+
+    opts->digest_cache = NULL;
 
     return;
 }
@@ -767,6 +871,12 @@ is_replay(fko_srv_options_t *opts, char *digest)
 #ifdef NO_DIGEST_CACHE
     return(-1);
 #else
+
+    if(digest == NULL || digest[0] == '\0')
+    {
+        log_msg(LOG_WARNING, "NULL or empty digest passed into is_replay()");
+        return(SPA_MSG_DIGEST_CACHE_ERROR);
+    }
 
 #if USE_FILE_CACHE
     return is_replay_file_cache(opts, digest);

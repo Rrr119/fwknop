@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid32240",
+  "B": "/home/dev/feedback/uid32240",
+  "sha": "5ea30fc9bbe444a091bcd215ee9f515e55606633",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "mrash",
+    "repo": "fwknop",
+    "sha": "5ea30fc9bbe444a091bcd215ee9f515e55606633"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "fwknop",
+    "cloneUrl": "https://github.com/Rrr119/fwknop.git"
+  },
+  "at": "2026-11-22T01:49:11.205Z"
+}

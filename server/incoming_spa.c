@@ -307,19 +307,22 @@ static int
 check_pkt_age(const fko_srv_options_t *opts, spa_data_t *spadat,
         const int stanza_num)
 {
-    int         ts_diff;
-    time_t      now_ts;
+    time_t      now_ts, ts_diff;
 
     if(strncasecmp(opts->config[CONF_ENABLE_SPA_PACKET_AGING], "Y", 1) == 0)
     {
         time(&now_ts);
 
-        ts_diff = labs(now_ts - spadat->timestamp);
+        if(spadat->timestamp > now_ts)
+            ts_diff = spadat->timestamp - now_ts;
+        else
+            ts_diff = now_ts - spadat->timestamp;
 
-        if(ts_diff > opts->max_spa_packet_age)
+        if(ts_diff > (time_t)opts->max_spa_packet_age)
         {
-            log_msg(LOG_WARNING, "[%s] (stanza #%d) SPA data time difference is too great (%i seconds).",
-                spadat->pkt_source_ip, stanza_num, ts_diff);
+            log_msg(LOG_WARNING,
+                "[%s] (stanza #%d) SPA data time difference is too great (%li seconds).",
+                spadat->pkt_source_ip, stanza_num, (long)ts_diff);
             return 0;
         }
     }
@@ -1029,15 +1032,6 @@ incoming_spa(fko_srv_options_t *opts)
             continue;
         }
 
-        /* Add this SPA packet into the replay detection cache
-        */
-        if(! add_replay_cache(opts, acc, &spadat, raw_digest,
-                    &added_replay_digest, stanza_num, &res))
-        {
-            acc = acc->next;
-            continue;
-        }
-
         /* At this point the SPA data is authenticated via the HMAC (if used
          * for now). Next we need to see if it meets our access criteria which
          * the server imposes regardless of the content of the SPA packet.
@@ -1085,6 +1079,17 @@ incoming_spa(fko_srv_options_t *opts)
         /* Check packet age if so configured.
         */
         if(! check_pkt_age(opts, &spadat, stanza_num))
+        {
+            acc = acc->next;
+            continue;
+        }
+
+        /* Only cache packets that pass the time window.  This keeps expired
+         * packets from occupying the replay cache and ensures the cache TTL
+         * is always at least as long as the packet acceptance window.
+        */
+        if(! add_replay_cache(opts, acc, &spadat, raw_digest,
+                    &added_replay_digest, stanza_num, &res))
         {
             acc = acc->next;
             continue;

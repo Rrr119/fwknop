@@ -21,5 +21,26 @@
         'fw_rule_created' => $NEW_RULE_REQUIRED,
         'fw_rule_removed' => $NEW_RULE_REMOVED,
     },
+    {
+        'category' => 'python fko extension',
+        'subcategory' => 'compatibility',
+        'detail'   => 'replay cache (python fko client)',
+        'function' => \&python_fko_replay_protection,
+        'fwknopd_cmdline'  => "$fwknopdCmd -c $cf{'def'} -a $cf{'hmac_sha512_short_key2_access'} " .
+            "-d $default_digest_file -p $default_pid_file $intf_str",
+        'server_positive_output_matches' => [qr/Replay\sdetected\sfrom\ssource\sIP/],
+        'fw_rule_created' => $NEW_RULE_REQUIRED,
+        'fw_rule_removed' => $NEW_RULE_REMOVED,
+    },
+    {
+        'category' => 'python fko extension',
+        'subcategory' => 'compatibility',
+        'detail'   => 'time window rejects old packet (python fko client)',
+        'function' => \&python_fko_time_window,
+        'fwknopd_cmdline'  => "$fwknopdCmd -c $cf{'def'} -a $cf{'hmac_sha512_short_key2_access'} " .
+            "-d $default_digest_file -p $default_pid_file $intf_str",
+        'server_positive_output_matches' => [qr/time\sdifference\sis\stoo\sgreat/],
+        'fw_rule_created' => $REQUIRE_NO_NEW_RULE,
+    },
 
 );

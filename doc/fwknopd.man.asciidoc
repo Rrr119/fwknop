@@ -273,10 +273,14 @@ the '@sysconfdir@/fwknop/fwknopd.conf' file for additional details.
     updated to something like ``udp dst portrange 10000-65535''.
 
 *ENABLE_SPA_PACKET_AGING* '<Y/N>'::
-    This instructs *fwknopd* to not honor SPA packets that have an old time
-    stamp. The value for ``old'' is defined by the ``MAX_SPA_PACKET_AGE''
-    variable. If ``ENABLE_SPA_PACKET_AGING'' is set to ``N'', *fwknopd*
-    will not use the client time stamp at all.
+    This instructs *fwknopd* to not honor SPA packets whose time stamp is
+    outside the window defined by the ``MAX_SPA_PACKET_AGE'' variable. Both
+    old and future time stamps are checked. When packet aging is enabled,
+    replay cache entries are retained for twice the configured window so that
+    a packet cannot be replayed while it is still within the acceptance window.
+    If ``ENABLE_SPA_PACKET_AGING'' is set to ``N'', *fwknopd* will not use the
+    client time stamp at all and replay cache entries remain until the cache is
+    rotated.
 
 *MAX_SPA_PACKET_AGE* '<seconds>'::
     Defines the maximum age (in seconds) that an SPA packet will be accepted.
@@ -289,8 +293,10 @@ the '@sysconfdir@/fwknop/fwknopd.conf' file for additional details.
     *fwknopd*. This allows digest sums to remain persistent across
     executions of *fwknopd*. The default is ``Y''. If set to ``N'',
     *fwknopd* will not check incoming SPA packet data against any
-    previously save digests. It is a good idea to leave this feature on
-    to reduce the possibility of being vulnerable to a replay attack.
+    previously saved digests. It is a good idea to leave this feature on
+    to reduce the possibility of being vulnerable to a replay attack. If the
+    digest file cannot be opened, replay tracking continues in memory for the
+    lifetime of the *fwknopd* process.
 
 *RULES_CHECK_THRESHOLD* '<count>'::
     Defines the number of times firewall rule expiration times must be checked

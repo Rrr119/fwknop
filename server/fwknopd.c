@@ -484,6 +484,17 @@ static void init_digest_cache(fko_srv_options_t *opts)
 
         if(rp_cache_count < 0)
         {
+#if USE_FILE_CACHE
+            log_msg(LOG_WARNING,
+                "Error opening persistent digest cache file."
+            );
+            /* The in-memory replay cache is still usable even if the
+             * persistent cache could not be loaded.
+            */
+            log_msg(LOG_WARNING,
+                "Continuing with an in-memory replay cache."
+            );
+#else
             log_msg(LOG_WARNING,
                 "Error opening digest cache file. Incoming digests will not be remembered."
             );
@@ -492,6 +503,7 @@ static void init_digest_cache(fko_srv_options_t *opts)
              * DEF_ENABLE_DIGEST_PERSISTENCE, and set_config_entry()
             */
             strlcpy(opts->config[CONF_ENABLE_DIGEST_PERSISTENCE], "N", 2);
+#endif
         }
 
         if(opts->verbose)
